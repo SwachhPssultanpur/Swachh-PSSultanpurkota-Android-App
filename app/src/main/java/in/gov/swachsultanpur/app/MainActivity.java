@@ -109,7 +109,13 @@ public class MainActivity extends Activity {
                     FileChooserParams params) {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
-                openCameraAndGallery(params);
+                // The HTML camera input has capture="environment". Open the
+                // native camera directly for that input; do not show Gallery first.
+                if (params != null && params.isCaptureEnabled()) {
+                    openCameraOnly();
+                } else {
+                    openGalleryOnly();
+                }
                 return true;
             }
         });
@@ -120,12 +126,6 @@ public class MainActivity extends Activity {
             webView.restoreState(savedInstanceState);
         }
 
-        if (!hasLocationPermission()) {
-            requestPermissions(new String[] {
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            }, REQUEST_LOCATION);
-        }
     }
 
     private boolean isTrustedGoogleOrigin(String origin) {
@@ -143,51 +143,43 @@ public class MainActivity extends Activity {
                     == PackageManager.PERMISSION_GRANTED;
     }
 
-    private void openCameraAndGallery(WebChromeClient.FileChooserParams params) {
-        Intent cameraIntent = null;
+    private void openCameraOnly() {
         try {
             File photo = createImageFile();
             cameraPhotoUri = FileProvider.getUriForFile(
                 this, getPackageName() + ".fileprovider", photo);
 
-            cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
             cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
             cameraIntent.setClipData(ClipData.newRawUri("camera_photo", cameraPhotoUri));
             cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
                                   Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+            if (cameraIntent.resolveActivity(getPackageManager()) != null) {
+                startActivityForResult(cameraIntent, REQUEST_FILE);
+            } else {
+                cameraPhotoUri = null;
+                Toast.makeText(this, "कैमरा ऐप उपलब्ध नहीं है। Gallery से फोटो चुनें।",
+                    Toast.LENGTH_LONG).show();
+                openGalleryOnly();
+            }
         } catch (Exception e) {
             cameraPhotoUri = null;
+            Toast.makeText(this, "कैमरा नहीं खुल सका: " + e.getMessage(),
+                Toast.LENGTH_LONG).show();
+            openGalleryOnly();
         }
+    }
 
-        Intent pickIntent;
-        if (android.os.Build.VERSION.SDK_INT >= 19) {
-            pickIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        } else {
-            pickIntent = new Intent(Intent.ACTION_GET_CONTENT);
-        }
+    private void openGalleryOnly() {
+        Intent pickIntent = new Intent(Intent.ACTION_GET_CONTENT);
         pickIntent.addCategory(Intent.CATEGORY_OPENABLE);
         pickIntent.setType("image/*");
-
         try {
-            if (cameraIntent != null) {
-                Intent chooser = Intent.createChooser(pickIntent, "कैमरा खोलें या गैलरी से फोटो चुनें");
-                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
-                startActivityForResult(chooser, REQUEST_FILE);
-            } else {
-                startActivityForResult(pickIntent, REQUEST_FILE);
-            }
+            startActivityForResult(Intent.createChooser(pickIntent, "Gallery से फोटो चुनें"), REQUEST_FILE);
         } catch (ActivityNotFoundException e) {
-            try {
-                if (cameraIntent != null) {
-                    startActivityForResult(cameraIntent, REQUEST_FILE);
-                } else {
-                    finishFileSelection(null);
-                    Toast.makeText(this, "इस मोबाइल में कैमरा/गैलरी ऐप उपलब्ध नहीं है", Toast.LENGTH_LONG).show();
-                }
-            } catch (ActivityNotFoundException ex) {
-                finishFileSelection(null);
-                Toast.makeText(this, "कैमरा या गैलरी नहीं खुल सकी", Toast.LENGTH_LONG).show();
-            }
+            finishFileSelection(null);
+            Toast.makeText(this, "Gallery ऐप उपलब्ध नहीं है।", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -216,6 +208,7 @@ public class MainActivity extends Activity {
                 if (data != null && data.getData() != null) {
                     results = new Uri[]{data.getData()};
                 } else if (cameraPhotoUri != null) {
+                    // Return the output URI; WebView reads it through FileProvider.
                     results = new Uri[]{cameraPhotoUri};
                 }
             }
