@@ -1,22 +1,19 @@
-Swachh Sultanpur Android APK Project
+SWACHH SULTANPUR ANDROID APP – NATIVE CAMERA + GPS UPDATE
 
-इस संशोधित संस्करण में Android WebView के Camera और GPS permission handling में सुधार किया गया है।
+इस संस्करण में Apps Script का URL, PIN login, Google Sheet, Google Drive और backend को नहीं बदला गया है।
 
-मुख्य बदलाव:
-1. HTML file input में capture="environment" होने पर Android अब Gallery chooser के बजाय सीधे Camera intent खोलता है।
-2. सामान्य image file input पर Gallery picker खुलता है।
-3. WebView Geolocation request आने पर ही Android Location permission माँगी जाती है; ऐप खुलते ही permission dialog से टकराव नहीं होगा।
-4. Apps Script Web App URL और मौजूदा Google Sheets/Drive backend नहीं बदले गए हैं।
+मुख्य सुधार:
+1. Open Camera बटन अब Android के native Camera app को सीधे खोलता है। फोटो लेने के बाद उसे छोटा/कॉम्प्रेस करके मौजूदा वेब फॉर्म के PHOTO_DATA में दिया जाता है।
+2. Gallery बटन अलग से Gallery खोलता है।
+3. GPS बटन अब WebView navigator.geolocation पर निर्भर नहीं है। Android LocationManager से GPS/Network location लेकर मौजूदा फॉर्म के GPS object में lat, lng और accuracy भरता है।
+4. Camera photo के लिए FileProvider में Pictures folder का path जोड़ा गया है।
+5. Camera और Location की Android runtime permissions जरूरत पड़ने पर माँगी जाती हैं।
 
 महत्वपूर्ण:
-- Apps Script Code.gs / Index.html को इस Android project में बदलने की जरूरत नहीं है। APK उसी deployed Apps Script URL को खोलता है।
-- वास्तविक फोन पर Camera और GPS का परीक्षण अभी आवश्यक है। अलग-अलग Android/WebView और फोन निर्माता के अनुसार व्यवहार बदल सकता है।
-- GPS के लिए फोन की Location ON, ऐप की Location permission Allow और इंटरनेट चालू रखें।
-- Camera button के HTML input में capture="environment" होना चाहिए।
+- इस ZIP में Apps Script Code.gs / Index.html या Google Sheet में कोई बदलाव नहीं है।
+- Android app वही मौजूदा deployed Apps Script URL खोलता है।
+- ZIP source project है; APK इसमें शामिल नहीं है। GitHub Actions से नया APK बनाना होगा।
+- इस वातावरण में Android SDK/Gradle build और वास्तविक मोबाइल परीक्षण उपलब्ध नहीं था। इसलिए build success या device पर 100% कार्य करने का दावा नहीं है। GitHub Actions build log की जाँच आवश्यक है।
 
-GitHub पर अपलोड:
-1. ZIP Extract करें।
-2. Extract किए गए मुख्य folder के अंदर की सभी files/folders Repository root पर अपलोड करें (अंदर का parent folder अपलोड न करें)।
-3. समान paths पर files replace करें।
-4. Actions में Build Swachh Sultanpur APK चलाएँ।
-5. Build सफल होने पर artifact से app-debug.apk डाउनलोड करें।
+GitHub upload:
+ZIP extract करें। अंदर वाले Swachh-PSSultanpurkota-Android-App-main folder के CONTENTS को repository main branch के root में upload/replace करें। पूरा folder एक अतिरिक्त nested folder के रूप में upload न करें।
