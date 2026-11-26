@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.webkit.GeolocationPermissions;
+import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -28,20 +29,22 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_LOCATION = 201;
-    private static final int REQUEST_FILE = 202;
+    private static final int REQUEST_CAMERA = 202;
+    private static final int REQUEST_FILE = 203;
 
-    // Existing Google Apps Script web app URL
     private static final String APP_URL =
         "https://script.google.com/macros/s/AKfycbyGFgfkYDH6ESrY2kCwtoGPClUCvY20nHCSKvocMVlQrtkvTFzLuLuKcBt_1G3HUwzMCQ/exec";
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraPhotoUri;
+    private GeolocationPermissions.Callback pendingGeoCallback;
+    private String pendingGeoOrigin;
+    private PermissionRequest pendingWebPermission;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         webView = new WebView(this);
         setContentView(webView);
 
@@ -61,31 +64,52 @@ public class MainActivity extends Activity {
             @Override
             public void onGeolocationPermissionsShowPrompt(
                     String origin, GeolocationPermissions.Callback callback) {
-                boolean trusted = origin != null &&
-                    (origin.startsWith("https://script.google.com") ||
-                     origin.startsWith("https://script.googleusercontent.com"));
-                if (!trusted) {
+                if (!isTrustedGoogleOrigin(origin)) {
                     callback.invoke(origin, false, false);
                     return;
                 }
-
                 if (hasLocationPermission()) {
                     callback.invoke(origin, true, true);
                 } else {
-                    callback.invoke(origin, false, false);
-                    requestLocationPermission();
+                    pendingGeoOrigin = origin;
+                    pendingGeoCallback = callback;
+                    requestPermissions(new String[] {
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    }, REQUEST_LOCATION);
                 }
+            }
+
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                // Allow web camera capture only after Android camera permission is granted.
+                boolean asksForVideo = false;
+                for (String resource : request.getResources()) {
+                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+                        asksForVideo = true;
+                    }
+                }
+                if (asksForVideo && checkSelfPermission(Manifest.permission.CAMERA)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    pendingWebPermission = request;
+                    requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA);
+                } else {
+                    runOnUiThread(() -> request.grant(request.getResources()));
+                }
+            }
+
+            @Override
+            public void onPermissionRequestCanceled(PermissionRequest request) {
+                if (pendingWebPermission == request) pendingWebPermission = null;
             }
 
             @Override
             public boolean onShowFileChooser(WebView view,
                     ValueCallback<Uri[]> callback,
                     FileChooserParams params) {
-                if (filePathCallback != null) {
-                    filePathCallback.onReceiveValue(null);
-                }
+                if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
-                openFileChooser();
+                openCameraAndGallery(params);
                 return true;
             }
         });
@@ -97,55 +121,73 @@ public class MainActivity extends Activity {
         }
 
         if (!hasLocationPermission()) {
-            requestLocationPermission();
+            requestPermissions(new String[] {
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            }, REQUEST_LOCATION);
         }
+    }
+
+    private boolean isTrustedGoogleOrigin(String origin) {
+        if (origin == null) return false;
+        return origin.startsWith("https://script.google.com/") ||
+               origin.equals("https://script.google.com") ||
+               origin.startsWith("https://script.googleusercontent.com/") ||
+               origin.equals("https://script.googleusercontent.com");
     }
 
     private boolean hasLocationPermission() {
         return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED ||
+                    == PackageManager.PERMISSION_GRANTED ||
                checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED;
+                    == PackageManager.PERMISSION_GRANTED;
     }
 
-    private void requestLocationPermission() {
-        requestPermissions(new String[] {
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        }, REQUEST_LOCATION);
-    }
-
-    private void openFileChooser() {
-        Intent gallery = new Intent(Intent.ACTION_GET_CONTENT);
-        gallery.addCategory(Intent.CATEGORY_OPENABLE);
-        gallery.setType("image/*");
-
-        Intent camera = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    private void openCameraAndGallery(WebChromeClient.FileChooserParams params) {
+        Intent cameraIntent = null;
         try {
             File photo = createImageFile();
             cameraPhotoUri = FileProvider.getUriForFile(
                 this, getPackageName() + ".fileprovider", photo);
-            camera.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-            camera.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            camera.setClipData(ClipData.newRawUri("camera", cameraPhotoUri));
-        } catch (IOException e) {
-            camera = null;
+
+            cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+            cameraIntent.setClipData(ClipData.newRawUri("camera_photo", cameraPhotoUri));
+            cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                  Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            cameraPhotoUri = null;
         }
 
-        Intent chooser = Intent.createChooser(gallery, "फोटो चुनें या कैमरा खोलें");
-        if (camera != null) {
-            chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[] { camera });
+        Intent pickIntent;
+        if (android.os.Build.VERSION.SDK_INT >= 19) {
+            pickIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        } else {
+            pickIntent = new Intent(Intent.ACTION_GET_CONTENT);
         }
+        pickIntent.addCategory(Intent.CATEGORY_OPENABLE);
+        pickIntent.setType("image/*");
 
         try {
-            startActivityForResult(chooser, REQUEST_FILE);
-        } catch (ActivityNotFoundException e) {
-            if (filePathCallback != null) {
-                filePathCallback.onReceiveValue(null);
-                filePathCallback = null;
+            if (cameraIntent != null) {
+                Intent chooser = Intent.createChooser(pickIntent, "कैमरा खोलें या गैलरी से फोटो चुनें");
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
+                startActivityForResult(chooser, REQUEST_FILE);
+            } else {
+                startActivityForResult(pickIntent, REQUEST_FILE);
             }
-            Toast.makeText(this, "कैमरा या गैलरी उपलब्ध नहीं है", Toast.LENGTH_LONG).show();
+        } catch (ActivityNotFoundException e) {
+            try {
+                if (cameraIntent != null) {
+                    startActivityForResult(cameraIntent, REQUEST_FILE);
+                } else {
+                    finishFileSelection(null);
+                    Toast.makeText(this, "इस मोबाइल में कैमरा/गैलरी ऐप उपलब्ध नहीं है", Toast.LENGTH_LONG).show();
+                }
+            } catch (ActivityNotFoundException ex) {
+                finishFileSelection(null);
+                Toast.makeText(this, "कैमरा या गैलरी नहीं खुल सकी", Toast.LENGTH_LONG).show();
+            }
         }
     }
 
@@ -153,24 +195,31 @@ public class MainActivity extends Activity {
         String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
         File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
         if (dir == null) dir = getCacheDir();
+        if (!dir.exists()) dir.mkdirs();
         return File.createTempFile("SWACHH_" + stamp + "_", ".jpg", dir);
+    }
+
+    private void finishFileSelection(Uri[] results) {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
+        }
+        cameraPhotoUri = null;
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_FILE && filePathCallback != null) {
+        if (requestCode == REQUEST_FILE) {
             Uri[] results = null;
             if (resultCode == RESULT_OK) {
                 if (data != null && data.getData() != null) {
-                    results = new Uri[] { data.getData() };
+                    results = new Uri[]{data.getData()};
                 } else if (cameraPhotoUri != null) {
-                    results = new Uri[] { cameraPhotoUri };
+                    results = new Uri[]{cameraPhotoUri};
                 }
             }
-            filePathCallback.onReceiveValue(results);
-            filePathCallback = null;
-            cameraPhotoUri = null;
+            finishFileSelection(results);
         }
     }
 
@@ -178,8 +227,27 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions,
             int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_LOCATION && webView != null) {
-            webView.reload();
+        if (requestCode == REQUEST_LOCATION) {
+            boolean granted = hasLocationPermission();
+            if (pendingGeoCallback != null && pendingGeoOrigin != null) {
+                pendingGeoCallback.invoke(pendingGeoOrigin, granted, granted);
+                pendingGeoCallback = null;
+                pendingGeoOrigin = null;
+            }
+            if (webView != null && !granted) {
+                Toast.makeText(this, "लोकेशन अनुमति नहीं मिली। App Settings में Location Allow करें।",
+                        Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == REQUEST_CAMERA) {
+            if (pendingWebPermission != null) {
+                if (checkSelfPermission(Manifest.permission.CAMERA)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    pendingWebPermission.grant(pendingWebPermission.getResources());
+                } else {
+                    pendingWebPermission.deny();
+                }
+                pendingWebPermission = null;
+            }
         }
     }
 
@@ -191,10 +259,17 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
+        if (webView != null && webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (webView != null) {
+            webView.stopLoading();
+            webView.destroy();
+            webView = null;
         }
+        super.onDestroy();
     }
 }
